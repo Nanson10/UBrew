@@ -100,450 +100,24 @@ get_filename_from_url() {
 # Infer package name from archive name or directory
 infer_package_name() {
     local input=$1
-    # Remove common archive extensions
-    local name=$(basename "$input" | sed -E 's/\.(tar\.(gz|bz2|xz)|zip|tgz|7z)$//')
-    # Remove version numbers and common separators
-    name=$(echo "$name" | sed -E 's/-v?[0-9]+(\.[0-9]+)*.*$//')
-    echo "$name"
-}
+    ###############################################################################
+    # Source modular scripts
+    ###############################################################################
 
-# Detect programming language of a project
-detect_language() {
-    local dir=$1
-    
-    if [[ -f "$dir/pom.xml" ]]; then
-        echo "java"
-    elif [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
-        echo "java"
-    elif [[ -f "$dir/go.mod" ]]; then
-        echo "go"
-    elif [[ -f "$dir/Cargo.toml" ]]; then
-        echo "rust"
-    elif [[ -f "$dir/setup.py" ]] || [[ -f "$dir/pyproject.toml" ]]; then
-        echo "python"
-    elif [[ -f "$dir/package.json" ]]; then
-        echo "node"
-    elif [[ -f "$dir/CMakeLists.txt" ]]; then
-        # Check for language hints
-        if grep -q "project.*LANGUAGES.*CXX" "$dir/CMakeLists.txt" 2>/dev/null; then
-            echo "cpp"
-        elif grep -q "project.*LANGUAGES.*C" "$dir/CMakeLists.txt" 2>/dev/null; then
-            echo "c"
-        else
-            echo "cmake"
-        fi
-    elif [[ -f "$dir/Makefile" ]] || [[ -f "$dir/makefile" ]]; then
-        echo "make"
-    elif find "$dir" -maxdepth 2 -name "*.csproj" | grep -q .; then
-        echo "csharp"
-    elif find "$dir" -maxdepth 2 -name "*.java" | grep -q .; then
-        echo "java"
-    elif find "$dir" -maxdepth 2 -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" | grep -q .; then
-        echo "cpp"
-    elif find "$dir" -maxdepth 2 -name "*.c" | grep -q .; then
-        echo "c"
-    else
-        echo "unknown"
-    fi
-}
-
-# Check if required build tools are installed
-check_build_tools() {
-    local language=$1
-    local missing=()
-    
-    case $language in
-        c|cpp|make)
-            command -v gcc >/dev/null 2>&1 || missing+=("gcc")
-            command -v g++ >/dev/null 2>&1 || missing+=("g++")
-            command -v make >/dev/null 2>&1 || missing+=("make")
-            ;;
-        csharp)
-            command -v dotnet >/dev/null 2>&1 || missing+=("dotnet")
-            ;;
-        java)
-            command -v javac >/dev/null 2>&1 || missing+=("javac")
-            ;;
-        cmake)
-            command -v cmake >/dev/null 2>&1 || missing+=("cmake")
-            command -v gcc >/dev/null 2>&1 || missing+=("gcc")
-            command -v make >/dev/null 2>&1 || missing+=("make")
-            ;;
-    esac
-    
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        return 1
-    fi
-    return 0
-}
-
-###############################################################################
-# Package Management Functions
-###############################################################################
-
-# Download and extract package
-download_and_extract() {
-    local url=$1
-    local dest=$2
-    local archive_name=$(get_filename_from_url "$url")
-    local archive_path="$ARCHIVES_DIR/$archive_name"
-
-    print_info "Downloading from: $url"
-
-    # Download archive if not already present
-    if [[ ! -f "$archive_path" ]]; then
-        if ! wget -q "$url" -O "$archive_path" 2>/dev/null; then
-            print_error "Failed to download package from $url"
-            rm -f "$archive_path"
-            return 1
-        fi
-        print_success "Downloaded successfully"
-    else
-        print_info "Archive already exists: $archive_path"
-    fi
-
-    # Create destination and extract
-    mkdir -p "$dest"
-
-    # Detect archive type and extract
-    if [[ "$archive_path" == *.tar.gz ]] || [[ "$archive_path" == *.tgz ]]; then
-        tar -xzf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$archive_path" -C "$dest"
-    elif [[ "$archive_path" == *.tar.bz2 ]]; then
-        tar -xjf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xjf "$archive_path" -C "$dest"
-    elif [[ "$archive_path" == *.tar.xz ]]; then
-        tar -xJf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xJf "$archive_path" -C "$dest"
-    elif [[ "$archive_path" == *.zip ]]; then
-        unzip -q "$archive_path" -d "$dest"
-        local contents=$(ls -A "$dest")
-        if [[ $(echo "$contents" | wc -l) -eq 1 ]] && [[ -d "$dest/$contents" ]]; then
-            mv "$dest/$contents"/* "$dest/" 2>/dev/null || true
-            rmdir "$dest/$contents" 2>/dev/null || true
-        fi
-    elif [[ "$archive_path" == *.7z ]]; then
-        7z x "$archive_path" -o"$dest" >/dev/null 2>&1 || {
-            print_error "7z extraction failed. Is 7zip installed?"
-            rm -f "$archive_path"
-            return 1
-        }
-    else
-        if file "$archive_path" | grep -q "gzip"; then
-            tar -xzf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$archive_path" -C "$dest"
-        elif file "$archive_path" | grep -q "Zip"; then
-            unzip -q "$archive_path" -d "$dest"
-        else
-            print_error "Unknown archive format"
-            rm -f "$archive_path"
-            return 1
-        fi
-    fi
-
-    print_success "Extracted successfully"
-    return 0
-}
-
-# Compile package based on detected language
-compile_package() {
-    local package_dir=$1
-    local language=$2
-    
-    print_info "Detected language: ${BLUE}${language}${NC}"
-    
-    case $language in
-        make|c|cpp)
-            compile_make "$package_dir"
-            ;;
-        cmake)
-            compile_cmake "$package_dir"
-            ;;
-        csharp)
-            compile_csharp "$package_dir"
-            ;;
-        java)
-            compile_java "$package_dir"
-            ;;
-        *)
-            print_warning "No compilation needed for $language"
-            return 0
-            ;;
-    esac
-}
-
-compile_make() {
-    local dir=$1
-    
-    if [[ ! -f "$dir/Makefile" ]] && [[ ! -f "$dir/makefile" ]]; then
-        print_warning "Makefile not found"
-        return 1
-    fi
-    
-    print_info "Running make..."
-    cd "$dir"
-    
-    if ! make 2>&1 | tee -a "$UBREW_LOG"; then
-        print_error "Make compilation failed"
-        return 1
-    fi
-    
-    print_success "Compilation completed"
-    return 0
-}
-
-compile_cmake() {
-    local dir=$1
-    
-    if [[ ! -f "$dir/CMakeLists.txt" ]]; then
-        print_warning "CMakeLists.txt not found"
-        return 1
-    fi
-    
-    print_info "Running cmake..."
-    cd "$dir"
-    
-    mkdir -p build
-    cd build
-    
-    if ! cmake .. 2>&1 | tee -a "$UBREW_LOG"; then
-        print_error "CMake configuration failed"
-        return 1
-    fi
-    
-    if ! make 2>&1 | tee -a "$UBREW_LOG"; then
-        print_error "CMake make failed"
-        return 1
-    fi
-    
-    print_success "Compilation completed"
-    return 0
-}
-
-compile_csharp() {
-    local dir=$1
-    
-    print_info "Running dotnet build..."
-    cd "$dir"
-    
-    if ! dotnet build -c Release 2>&1 | tee -a "$UBREW_LOG"; then
-        print_error "C# compilation failed"
-        return 1
-    fi
-    
-    print_success "Compilation completed"
-    return 0
-}
-
-compile_java() {
-    local dir=$1
-    
-    print_info "Running Java compilation..."
-    cd "$dir"
-    
-    if [[ -f "pom.xml" ]]; then
-        if ! mvn clean package -DskipTests 2>&1 | tee -a "$UBREW_LOG"; then
-            print_error "Maven build failed"
-            return 1
-        fi
-    elif [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; then
-        if ! gradle build -x test 2>&1 | tee -a "$UBREW_LOG"; then
-            print_error "Gradle build failed"
-            return 1
-        fi
-    else
-        print_warning "No Maven or Gradle configuration found"
-        return 1
-    fi
-    
-    print_success "Compilation completed"
-    return 0
-}
-
-# Find executable in compiled package
-find_executable() {
-    local package_dir=$1
-    local language=$2
-    
-    case $language in
-        make|c|cpp)
-            # Look for executables in common locations
-            find "$package_dir" -maxdepth 2 -type f -executable | head -1
-            ;;
-        cmake)
-            # Look in build directory
-            find "$package_dir/build" -maxdepth 1 -type f -executable | head -1
-            ;;
-        csharp)
-            # Look for .dll or .exe files in bin/Release
-            find "$package_dir" -path "*/bin/Release/*" -name "*.dll" -o -name "*.exe" | head -1
-            ;;
-        java)
-            # Look for jar files
-            find "$package_dir" -name "*.jar" | head -1
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-# Update PATH with package executables
-update_package_path() {
-    local package_name=$1
-    local package_dir=$2
-    
-    # Simply call verify to ensure everything is in sync
-    # The verify function will handle adding missing packages
-    cmd_verify >/dev/null 2>&1
-    
-    # Double-check that the package was added
-    if grep -q "# ubrew: $package_name\$" "$UBREW_PATH_FILE"; then
-        print_success "Added $package_name to PATH"
-        
-        # Source the updated path file in current shell if possible
-        if [[ -n "$BASH_VERSION" ]] || [[ -n "$ZSH_VERSION" ]]; then
-            source "$UBREW_PATH_FILE" 2>/dev/null || true
-        fi
-    fi
-}
-
-# Remove package from PATH configuration
-remove_package_path() {
-    local package_name=$1
-    
-    # Simply call verify to ensure everything is in sync
-    # The verify function will handle removing orphaned entries
-    cmd_verify >/dev/null 2>&1
-    
-    # Confirm removal
-    if ! grep -q "# ubrew: $package_name\$" "$UBREW_PATH_FILE" 2>/dev/null; then
-        print_success "Removed $package_name from PATH"
-    fi
-}
-
-# Ensure path file has the proper structure with warnings
-ensure_path_file_structure() {
-    if [[ ! -f "$UBREW_PATH_FILE" ]]; then
-        cat > "$UBREW_PATH_FILE" <<'EOF'
-#!/bin/bash
-# ubrew PATH configuration file
-# 
-# WARNING: DO NOT MANUALLY EDIT THE SECTION BETWEEN THE MARKERS BELOW!
-# This section is automatically managed by ubrew.sh
-# Manual edits will be overwritten when packages are added or removed.
-#
-# === BEGIN UBREW MANAGED PATHS ===
-# (ubrew will automatically add package paths here)
-# === END UBREW MANAGED PATHS ===
-#
-# You may add your own custom PATH modifications below this line:
-
-EOF
-    else
-        # Check if markers exist, if not add them
-        if ! grep -q "^# === BEGIN UBREW MANAGED PATHS ===" "$UBREW_PATH_FILE"; then
-            # Backup existing entries in ubrew directory
-            local temp_file="${UBREW_HOME}/temp_path_backup_$$_$(date +%s)"
-            if grep -q "# ubrew:" "$UBREW_PATH_FILE"; then
-                grep "# ubrew:" "$UBREW_PATH_FILE" > "$temp_file"
-            fi
-            
-            # Recreate file with structure
-            cat > "$UBREW_PATH_FILE" <<'EOF'
-#!/bin/bash
-# ubrew PATH configuration file
-# 
-# WARNING: DO NOT MANUALLY EDIT THE SECTION BETWEEN THE MARKERS BELOW!
-# This section is automatically managed by ubrew.sh
-# Manual edits will be overwritten when packages are added or removed.
-#
-# === BEGIN UBREW MANAGED PATHS ===
-# (ubrew will automatically add package paths here)
-EOF
-            
-            # Add back existing entries
-            if [[ -s "$temp_file" ]]; then
-                cat "$temp_file" >> "$UBREW_PATH_FILE"
-            fi
-            
-            cat >> "$UBREW_PATH_FILE" <<'EOF'
-# === END UBREW MANAGED PATHS ===
-#
-# You may add your own custom PATH modifications below this line:
-
-EOF
-            rm -f "$temp_file"
-        fi
-    fi
-}
-
-# Verify and synchronize PATH configuration with installed packages
-# This function ensures that:
-# 1. All installed packages have their paths in the config
-# 2. All paths in the config correspond to actual installed packages
-# 3. The path file has the proper structure
-cmd_verify() {
-    print_info "Verifying ubrew PATH configuration..."
-    
-    # Ensure proper structure
-    ensure_path_file_structure
-    
-    local issues_found=0
-    local issues_fixed=0
-    
-    # Get list of installed packages
-    local installed_packages=()
-    if [[ -d "$LOCAL_PACKAGES" ]]; then
-        while IFS= read -r -d '' package_dir; do
-            local package_name=$(basename "$package_dir")
-            if [[ -f "$package_dir/.ubrew_metadata" ]]; then
-                installed_packages+=("$package_name")
-            fi
-        done < <(find "$LOCAL_PACKAGES" -maxdepth 1 -type d -not -path "$LOCAL_PACKAGES" -print0)
-    fi
-    
-    # Get list of packages in PATH config
-    local configured_packages=()
-    if [[ -f "$UBREW_PATH_FILE" ]]; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ \#\ ubrew:\ (.+)$ ]]; then
-                configured_packages+=("${BASH_REMATCH[1]}")
-            fi
-        done < "$UBREW_PATH_FILE"
-    fi
-    
-    # Check for installed packages missing from PATH
-    for package in "${installed_packages[@]}"; do
-        local found=0
-        for configured in "${configured_packages[@]}"; do
-            if [[ "$package" == "$configured" ]]; then
-                found=1
-                break
-            fi
-        done
-        
-        if [[ $found -eq 0 ]]; then
-            print_warning "Package '$package' is installed but not in PATH"
-            ((issues_found++))
-            
-            # Fix: Add to PATH
-            local package_dir="$LOCAL_PACKAGES/$package"
-            local bin_dir="$package_dir/bin"
-            mkdir -p "$bin_dir"
-            
-            sed -i.bak "/^# === END UBREW MANAGED PATHS ===/i\\
-export PATH=\"$bin_dir:\\\$PATH\" # ubrew: $package" "$UBREW_PATH_FILE"
-            rm -f "$UBREW_PATH_FILE.bak"
-            
-            print_success "Fixed: Added '$package' to PATH"
-            ((issues_fixed++))
-        fi
-    done
-    
-    # Check for PATH entries without corresponding packages
-    for configured in "${configured_packages[@]}"; do
-        local found=0
-        for package in "${installed_packages[@]}"; do
-            if [[ "$configured" == "$package" ]]; then
-                found=1
-                break
+    source "$(dirname "$0")/scripts/initialize.sh"
+    source "$(dirname "$0")/scripts/log.sh"
+    source "$(dirname "$0")/scripts/print.sh"
+    source "$(dirname "$0")/scripts/utils.sh"
+    source "$(dirname "$0")/scripts/download_and_extract.sh"
+    source "$(dirname "$0")/scripts/compile.sh"
+    source "$(dirname "$0")/scripts/path.sh"
+    source "$(dirname "$0")/scripts/cmd_help.sh"
+    source "$(dirname "$0")/scripts/cmd_list.sh"
+    source "$(dirname "$0")/scripts/cmd_remove.sh"
+    source "$(dirname "$0")/scripts/cmd_add.sh"
+    source "$(dirname "$0")/scripts/cmd_verify.sh"
+    source "$(dirname "$0")/scripts/cmd_init.sh"
+    source "$(dirname "$0")/scripts/cmd_uninit.sh"
             fi
         done
         
@@ -618,15 +192,15 @@ export PATH=\"$bin_dir:\\\$PATH\" # ubrew: $package" "$UBREW_PATH_FILE"
                         print_info "Detected language: $language"
                         if check_build_tools "$language"; then
                             if compile_package "$package_dir" "$language"; then
-                                cat > "$package_dir/.ubrew_metadata" <<EOF
-        {
-          "name": "$package_name",
-          "url": "archive:$archive_name",
-          "language": "$language",
-          "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-          "installed_by": "ubrew.sh"
-        }
-        EOF
+                                                                cat > "$package_dir/.ubrew_metadata" <<EOF
+{
+    "name": "$package_name",
+    "url": "archive:$archive_name",
+    "language": "$language",
+    "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "installed_by": "ubrew.sh"
+}
+EOF
                                 print_success "Compiled and installed package '$package_name' from archive."
                                 ((issues_fixed++))
                             else
@@ -910,7 +484,7 @@ cmd_uninit() {
 }
 
 cmd_help() {
-    cat <<EOF
+cat <<EOF
 ${BLUE}ubrew.sh${NC} - Simple Package Manager for Ubuntu
 
 ${BLUE}Usage:${NC}
@@ -960,7 +534,6 @@ ${BLUE}Features:${NC}
   ✓ PATH verification and repair
   ✓ Installation logging
   ✓ Metadata tracking
-
 EOF
 }
 
