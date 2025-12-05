@@ -19,6 +19,7 @@ UBREW_HOME="${HOME}/.ubrew"
 LOCAL_PACKAGES="${HOME}/local_packages"
 UBREW_PATH_FILE="${UBREW_HOME}/path.conf"
 UBREW_LOG="${UBREW_HOME}/ubrew.log"
+UBREW_TEMP="${UBREW_HOME}/temp"
 
 # Colors for output
 RED='\033[0;31m'
@@ -35,6 +36,10 @@ initialize() {
     # Create necessary directories
     mkdir -p "$UBREW_HOME"
     mkdir -p "$LOCAL_PACKAGES"
+    mkdir -p "$UBREW_TEMP"
+    
+    # Clean up old temp files (older than 1 day)
+    find "$UBREW_TEMP" -type f -mtime +1 -delete 2>/dev/null || true
     
     # Initialize path config with proper structure
     if [[ ! -f "$UBREW_PATH_FILE" ]]; then
@@ -181,7 +186,8 @@ download_and_extract() {
     
     print_info "Downloading from: $url"
     
-    local temp_file=$(mktemp)
+    # Create temp file in ubrew directory instead of system /tmp
+    local temp_file="${UBREW_HOME}/temp_download_$$_$(date +%s)"
     if ! wget -q "$url" -O "$temp_file" 2>/dev/null; then
         print_error "Failed to download package from $url"
         rm -f "$temp_file"
@@ -227,6 +233,7 @@ download_and_extract() {
         fi
     fi
     
+    # Clean up temp file
     rm -f "$temp_file"
     print_success "Extracted successfully"
     return 0
@@ -430,8 +437,8 @@ EOF
     else
         # Check if markers exist, if not add them
         if ! grep -q "^# === BEGIN UBREW MANAGED PATHS ===" "$UBREW_PATH_FILE"; then
-            # Backup existing entries
-            local temp_file=$(mktemp)
+            # Backup existing entries in ubrew directory
+            local temp_file="${UBREW_HOME}/temp_path_backup_$$_$(date +%s)"
             if grep -q "# ubrew:" "$UBREW_PATH_FILE"; then
                 grep "# ubrew:" "$UBREW_PATH_FILE" > "$temp_file"
             fi
