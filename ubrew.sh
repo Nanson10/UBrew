@@ -17,6 +17,7 @@ fi
 # Configuration
 UBREW_HOME="${HOME}/.ubrew"
 LOCAL_PACKAGES="${HOME}/local_packages"
+ARCHIVES_DIR="${LOCAL_PACKAGES}/archives"
 UBREW_PATH_FILE="${UBREW_HOME}/path.conf"
 UBREW_LOG="${UBREW_HOME}/ubrew.log"
 UBREW_TEMP="${UBREW_HOME}/temp"
@@ -36,6 +37,7 @@ initialize() {
     # Create necessary directories
     mkdir -p "$UBREW_HOME"
     mkdir -p "$LOCAL_PACKAGES"
+    mkdir -p "$ARCHIVES_DIR"
     mkdir -p "$UBREW_TEMP"
     
     # Clean up old temp files (older than 1 day)
@@ -183,58 +185,58 @@ check_build_tools() {
 download_and_extract() {
     local url=$1
     local dest=$2
-    
+    local archive_name=$(get_filename_from_url "$url")
+    local archive_path="$ARCHIVES_DIR/$archive_name"
+
     print_info "Downloading from: $url"
-    
-    # Create temp file in ubrew directory instead of system /tmp
-    local temp_file="${UBREW_HOME}/temp_download_$$_$(date +%s)"
-    if ! wget -q "$url" -O "$temp_file" 2>/dev/null; then
-        print_error "Failed to download package from $url"
-        rm -f "$temp_file"
-        return 1
+
+    # Download archive if not already present
+    if [[ ! -f "$archive_path" ]]; then
+        if ! wget -q "$url" -O "$archive_path" 2>/dev/null; then
+            print_error "Failed to download package from $url"
+            rm -f "$archive_path"
+            return 1
+        fi
+        print_success "Downloaded successfully"
+    else
+        print_info "Archive already exists: $archive_path"
     fi
-    
-    print_success "Downloaded successfully"
-    
+
     # Create destination and extract
     mkdir -p "$dest"
-    
+
     # Detect archive type and extract
-    if [[ "$temp_file" == *.tar.gz ]] || [[ "$temp_file" == *.tgz ]]; then
-        tar -xzf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$temp_file" -C "$dest"
-    elif [[ "$temp_file" == *.tar.bz2 ]]; then
-        tar -xjf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xjf "$temp_file" -C "$dest"
-    elif [[ "$temp_file" == *.tar.xz ]]; then
-        tar -xJf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xJf "$temp_file" -C "$dest"
-    elif [[ "$temp_file" == *.zip ]]; then
-        unzip -q "$temp_file" -d "$dest"
-        # If extraction created a single directory, move its contents up
+    if [[ "$archive_path" == *.tar.gz ]] || [[ "$archive_path" == *.tgz ]]; then
+        tar -xzf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$archive_path" -C "$dest"
+    elif [[ "$archive_path" == *.tar.bz2 ]]; then
+        tar -xjf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xjf "$archive_path" -C "$dest"
+    elif [[ "$archive_path" == *.tar.xz ]]; then
+        tar -xJf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xJf "$archive_path" -C "$dest"
+    elif [[ "$archive_path" == *.zip ]]; then
+        unzip -q "$archive_path" -d "$dest"
         local contents=$(ls -A "$dest")
         if [[ $(echo "$contents" | wc -l) -eq 1 ]] && [[ -d "$dest/$contents" ]]; then
             mv "$dest/$contents"/* "$dest/" 2>/dev/null || true
             rmdir "$dest/$contents" 2>/dev/null || true
         fi
-    elif [[ "$temp_file" == *.7z ]]; then
-        7z x "$temp_file" -o"$dest" >/dev/null 2>&1 || {
+    elif [[ "$archive_path" == *.7z ]]; then
+        7z x "$archive_path" -o"$dest" >/dev/null 2>&1 || {
             print_error "7z extraction failed. Is 7zip installed?"
-            rm -f "$temp_file"
+            rm -f "$archive_path"
             return 1
         }
     else
-        # Try to detect by file content
-        if file "$temp_file" | grep -q "gzip"; then
-            tar -xzf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$temp_file" -C "$dest"
-        elif file "$temp_file" | grep -q "Zip"; then
-            unzip -q "$temp_file" -d "$dest"
+        if file "$archive_path" | grep -q "gzip"; then
+            tar -xzf "$archive_path" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$archive_path" -C "$dest"
+        elif file "$archive_path" | grep -q "Zip"; then
+            unzip -q "$archive_path" -d "$dest"
         else
             print_error "Unknown archive format"
-            rm -f "$temp_file"
+            rm -f "$archive_path"
             return 1
         fi
     fi
-    
-    # Clean up temp file
-    rm -f "$temp_file"
+
     print_success "Extracted successfully"
     return 0
 }
@@ -577,113 +579,181 @@ export PATH=\"$bin_dir:\\\$PATH\" # ubrew: $package" "$UBREW_PATH_FILE"
         print_success "PATH configuration is correct! All packages are properly configured."
     else
         print_info "Found $issues_found issue(s), fixed $issues_fixed"
-        print_success "PATH verification complete!"
-    fi
-    
-    log "INFO" "PATH verification completed: $issues_found issues found, $issues_fixed fixed"
-    return 0
-}
+        cmd_verify() {
+            print_info "Verifying ubrew archives and packages..."
+            ensure_path_file_structure
+            local issues_found=0
+            local issues_fixed=0
 
-# Get the shell configuration file
-get_shell_rc_file() {
-    if [[ "$SHELL" == *"zsh"* ]]; then
-        echo "$HOME/.zshrc"
-    elif [[ "$SHELL" == *"bash"* ]]; then
-        echo "$HOME/.bashrc"
-    else
-        echo "$HOME/.bashrc"
-    fi
-}
+            # Get all archive files
+            local archive_files=()
+            if [[ -d "$ARCHIVES_DIR" ]]; then
+                while IFS= read -r -d '' archive; do
+                    archive_files+=("$archive")
+                done < <(find "$ARCHIVES_DIR" -type f -print0)
+            fi
 
-###############################################################################
-# Command Implementations
-###############################################################################
+            # Get all installed packages
+            local installed_packages=()
+            if [[ -d "$LOCAL_PACKAGES" ]]; then
+                while IFS= read -r -d '' package_dir; do
+                    local package_name=$(basename "$package_dir")
+                    if [[ -f "$package_dir/.ubrew_metadata" ]]; then
+                        installed_packages+=("$package_name")
+                    fi
+                done < <(find "$LOCAL_PACKAGES" -maxdepth 1 -type d -not -path "$LOCAL_PACKAGES" -not -path "$ARCHIVES_DIR" -print0)
+            fi
 
-cmd_add() {
-    if [[ $# -lt 1 ]]; then
-        print_error "Usage: ubrew.sh add <url>"
-        return 1
-    fi
-    
-    local url=$1
-    local package_name=$(infer_package_name "$url")
-    local package_dir="$LOCAL_PACKAGES/$package_name"
-    
-    # Check if package already exists
-    if [[ -d "$package_dir" ]]; then
-        print_warning "Package '$package_name' already installed at $package_dir"
-        read -p "Overwrite? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            return 1
-        fi
-        rm -rf "$package_dir"
-    fi
-    
-    print_info "Installing package: ${BLUE}${package_name}${NC}"
-    print_info "URL: $url"
-    
-    # Download and extract
-    if ! download_and_extract "$url" "$package_dir"; then
-        rm -rf "$package_dir"
-        log "ERROR" "Failed to download/extract package: $url"
-        return 1
-    fi
-    
-    # Detect language
-    local language=$(detect_language "$package_dir")
-    print_info "Project type: ${BLUE}${language}${NC}"
-    
-    # Check build tools
-    if ! check_build_tools "$language"; then
-        print_error "Missing required build tools for $language"
-        print_info "Installation will continue, but compilation will be skipped"
-        log "WARNING" "Missing build tools for $language"
-    else
-        # Attempt compilation
-        if ! compile_package "$package_dir" "$language"; then
-            print_warning "Compilation failed, but package files are available"
-            log "ERROR" "Compilation failed for package: $package_name"
-        fi
-    fi
-    
-    # Create installation metadata
-    cat > "$package_dir/.ubrew_metadata" <<EOF
-{
-  "name": "$package_name",
-  "url": "$url",
-  "language": "$language",
-  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "installed_by": "ubrew.sh"
-}
-EOF
-    
-    # Update PATH
-    update_package_path "$package_name" "$package_dir"
-    
-    print_success "Package '${package_name}' installed successfully!"
-    print_success "Package automatically added to PATH"
-    log "INFO" "Package installed: $package_name from $url"
-    
-    # Remind user to source the configuration if not already done
-    local rc_file=$(get_shell_rc_file)
-    if ! grep -q "source.*$UBREW_PATH_FILE" "$rc_file" 2>/dev/null; then
-        print_info "To use the package in new shells, run: ubrew.sh init"
-        print_info "Or add this to your $rc_file:"
-        echo "    if [[ -f \"$UBREW_PATH_FILE\" ]]; then source \"$UBREW_PATH_FILE\"; fi"
-    else
-        print_info "Reload your shell to use the package: exec \$SHELL"
-    fi
-    
-    return 0
-}
+            # Compile orphaned archives (archives with no corresponding package)
+            for archive_path in "${archive_files[@]}"; do
+                local archive_name=$(basename "$archive_path")
+                local package_name=$(infer_package_name "$archive_name")
+                local package_dir="$LOCAL_PACKAGES/$package_name"
+                if [[ ! -d "$package_dir" ]] || [[ ! -f "$package_dir/.ubrew_metadata" ]]; then
+                    print_warning "Archive '$archive_name' has no package. Attempting to compile..."
+                    mkdir -p "$package_dir"
+                    # Extract and compile
+                    if download_and_extract "$archive_path" "$package_dir"; then
+                        local language=$(detect_language "$package_dir")
+                        print_info "Detected language: $language"
+                        if check_build_tools "$language"; then
+                            if compile_package "$package_dir" "$language"; then
+                                cat > "$package_dir/.ubrew_metadata" <<EOF
+        {
+          "name": "$package_name",
+          "url": "archive:$archive_name",
+          "language": "$language",
+          "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "installed_by": "ubrew.sh"
+        }
+        EOF
+                                print_success "Compiled and installed package '$package_name' from archive."
+                                ((issues_fixed++))
+                            else
+                                print_error "Failed to compile package from archive '$archive_name'."
+                                # Prompt to remove archive
+                                read -p "Remove archive '$archive_name'? (y/n) " -n 1 -r
+                                echo
+                                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                                    rm -f "$archive_path"
+                                    print_success "Removed archive '$archive_name'."
+                                    ((issues_fixed++))
+                                else
+                                    print_warning "Archive '$archive_name' kept."
+                                fi
+                                rm -rf "$package_dir"
+                                ((issues_found++))
+                            fi
+                        else
+                            print_error "Missing build tools for '$language'. Skipping compilation."
+                            ((issues_found++))
+                        fi
+                    else
+                        print_error "Failed to extract archive '$archive_name'."
+                        read -p "Remove archive '$archive_name'? (y/n) " -n 1 -r
+                        echo
+                        if [[ $REPLY =~ ^[Yy]$ ]]; then
+                            rm -f "$archive_path"
+                            print_success "Removed archive '$archive_name'."
+                            ((issues_fixed++))
+                        else
+                            print_warning "Archive '$archive_name' kept."
+                        fi
+                        rm -rf "$package_dir"
+                        ((issues_found++))
+                    fi
+                fi
+            done
 
-cmd_remove() {
-    if [[ $# -lt 1 ]]; then
-        print_error "Usage: ubrew.sh remove <package-name>"
-        return 1
-    fi
-    
+            # Remove orphaned packages (packages with no corresponding archive)
+            for package in "${installed_packages[@]}"; do
+                local found=0
+                for archive_path in "${archive_files[@]}"; do
+                    local archive_name=$(basename "$archive_path")
+                    local archive_pkg=$(infer_package_name "$archive_name")
+                    if [[ "$package" == "$archive_pkg" ]]; then
+                        found=1
+                        break
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    print_warning "Package '$package' is orphaned (no archive). Removing..."
+                    rm -rf "$LOCAL_PACKAGES/$package"
+                    print_success "Removed orphaned package '$package'."
+                    ((issues_fixed++))
+                fi
+            done
+
+            # Ensure PATH configuration is correct (last step)
+            print_info "Ensuring PATH configuration..."
+            # Get list of packages in PATH config
+            local configured_packages=()
+            if [[ -f "$UBREW_PATH_FILE" ]]; then
+                while IFS= read -r line; do
+                    if [[ "$line" =~ \#\ ubrew:\ (.+)$ ]]; then
+                        configured_packages+=("${BASH_REMATCH[1]}")
+                    fi
+                done < "$UBREW_PATH_FILE"
+            fi
+            # Add missing packages to PATH
+            for package in "${installed_packages[@]}"; do
+                local found=0
+                for configured in "${configured_packages[@]}"; do
+                    if [[ "$package" == "$configured" ]]; then
+                        found=1
+                        break
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    print_warning "Package '$package' is installed but not in PATH"
+                    local package_dir="$LOCAL_PACKAGES/$package"
+                    local bin_dir="$package_dir/bin"
+                    mkdir -p "$bin_dir"
+                    sed -i.bak "/^# === END UBREW MANAGED PATHS ===/i\\
+                    rm -f "$UBREW_PATH_FILE.bak"
+                    print_success "Fixed: Added '$package' to PATH"
+                    ((issues_fixed++))
+                fi
+            done
+            # Remove PATH entries without corresponding packages
+            for configured in "${configured_packages[@]}"; do
+                local found=0
+                for package in "${installed_packages[@]}"; do
+                    if [[ "$configured" == "$package" ]]; then
+                        found=1
+                        break
+                    fi
+                done
+                if [[ $found -eq 0 ]]; then
+                    print_warning "PATH contains '$configured' but package is not installed"
+                    sed -i.bak "/# ubrew: $configured\$/d" "$UBREW_PATH_FILE"
+                    rm -f "$UBREW_PATH_FILE.bak"
+                    print_success "Fixed: Removed '$configured' from PATH"
+                    ((issues_fixed++))
+                fi
+            done
+            # Ensure bin directories exist
+            for package in "${installed_packages[@]}"; do
+                local package_dir="$LOCAL_PACKAGES/$package"
+                local bin_dir="$package_dir/bin"
+                if [[ ! -d "$bin_dir" ]]; then
+                    print_warning "Package '$package' missing bin directory"
+                    mkdir -p "$bin_dir"
+                    print_success "Fixed: Created bin directory for '$package'"
+                    ((issues_fixed++))
+                fi
+            done
+
+            # Summary
+            if [[ $issues_found -eq 0 ]]; then
+                print_success "Verification complete! All archives and packages are properly linked."
+            else
+                print_info "Found $issues_found issue(s), fixed $issues_fixed"
+                print_success "Verification complete!"
+            fi
+            log "INFO" "Verification completed: $issues_found issues found, $issues_fixed fixed"
+            return 0
+        }
     local package_name=$1
     local package_dir="$LOCAL_PACKAGES/$package_name"
     
