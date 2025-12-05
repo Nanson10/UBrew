@@ -1,0 +1,729 @@
+#!/bin/bash
+
+###############################################################################
+# ubrew.sh - Simple Package Manager for Ubuntu
+# 
+# A homebrew-like package manager for Ubuntu that downloads, extracts,
+# compiles (if needed), and manages packages locally.
+#
+# Usage: ubrew.sh [add|remove|list|init|uninit] [options]
+###############################################################################
+
+# Only set strict mode when executed directly, not when sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -euo pipefail
+fi
+
+# Configuration
+UBREW_HOME="${HOME}/.ubrew"
+LOCAL_PACKAGES="${HOME}/local_packages"
+UBREW_PATH_FILE="${UBREW_HOME}/path.conf"
+UBREW_LOG="${UBREW_HOME}/ubrew.log"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+###############################################################################
+# Initialization Functions
+###############################################################################
+
+initialize() {
+    # Create necessary directories
+    mkdir -p "$UBREW_HOME"
+    mkdir -p "$LOCAL_PACKAGES"
+    
+    # Initialize path config if it doesn't exist
+    if [[ ! -f "$UBREW_PATH_FILE" ]]; then
+        touch "$UBREW_PATH_FILE"
+    fi
+}
+
+log() {
+    local level=$1
+    shift
+    local message="$@"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[${timestamp}] [${level}] ${message}" >> "$UBREW_LOG"
+}
+
+print_info() {
+    echo -e "${BLUE}ℹ${NC} $@"
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $@"
+}
+
+print_error() {
+    echo -e "${RED}✗${NC} $@"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠${NC} $@"
+}
+
+###############################################################################
+# Utility Functions
+###############################################################################
+
+# Extract filename from URL
+get_filename_from_url() {
+    local url=$1
+    basename "$url" | sed 's/?.*$//'
+}
+
+# Infer package name from archive name or directory
+infer_package_name() {
+    local input=$1
+    # Remove common archive extensions
+    local name=$(basename "$input" | sed -E 's/\.(tar\.(gz|bz2|xz)|zip|tgz|7z)$//')
+    # Remove version numbers and common separators
+    name=$(echo "$name" | sed -E 's/-v?[0-9]+(\.[0-9]+)*.*$//')
+    echo "$name"
+}
+
+# Detect programming language of a project
+detect_language() {
+    local dir=$1
+    
+    if [[ -f "$dir/pom.xml" ]]; then
+        echo "java"
+    elif [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
+        echo "java"
+    elif [[ -f "$dir/go.mod" ]]; then
+        echo "go"
+    elif [[ -f "$dir/Cargo.toml" ]]; then
+        echo "rust"
+    elif [[ -f "$dir/setup.py" ]] || [[ -f "$dir/pyproject.toml" ]]; then
+        echo "python"
+    elif [[ -f "$dir/package.json" ]]; then
+        echo "node"
+    elif [[ -f "$dir/CMakeLists.txt" ]]; then
+        # Check for language hints
+        if grep -q "project.*LANGUAGES.*CXX" "$dir/CMakeLists.txt" 2>/dev/null; then
+            echo "cpp"
+        elif grep -q "project.*LANGUAGES.*C" "$dir/CMakeLists.txt" 2>/dev/null; then
+            echo "c"
+        else
+            echo "cmake"
+        fi
+    elif [[ -f "$dir/Makefile" ]] || [[ -f "$dir/makefile" ]]; then
+        echo "make"
+    elif find "$dir" -maxdepth 2 -name "*.csproj" | grep -q .; then
+        echo "csharp"
+    elif find "$dir" -maxdepth 2 -name "*.java" | grep -q .; then
+        echo "java"
+    elif find "$dir" -maxdepth 2 -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" | grep -q .; then
+        echo "cpp"
+    elif find "$dir" -maxdepth 2 -name "*.c" | grep -q .; then
+        echo "c"
+    else
+        echo "unknown"
+    fi
+}
+
+# Check if required build tools are installed
+check_build_tools() {
+    local language=$1
+    local missing=()
+    
+    case $language in
+        c|cpp|make)
+            command -v gcc >/dev/null 2>&1 || missing+=("gcc")
+            command -v g++ >/dev/null 2>&1 || missing+=("g++")
+            command -v make >/dev/null 2>&1 || missing+=("make")
+            ;;
+        csharp)
+            command -v dotnet >/dev/null 2>&1 || missing+=("dotnet")
+            ;;
+        java)
+            command -v javac >/dev/null 2>&1 || missing+=("javac")
+            ;;
+        cmake)
+            command -v cmake >/dev/null 2>&1 || missing+=("cmake")
+            command -v gcc >/dev/null 2>&1 || missing+=("gcc")
+            command -v make >/dev/null 2>&1 || missing+=("make")
+            ;;
+    esac
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
+###############################################################################
+# Package Management Functions
+###############################################################################
+
+# Download and extract package
+download_and_extract() {
+    local url=$1
+    local dest=$2
+    
+    print_info "Downloading from: $url"
+    
+    local temp_file=$(mktemp)
+    if ! wget -q "$url" -O "$temp_file" 2>/dev/null; then
+        print_error "Failed to download package from $url"
+        rm -f "$temp_file"
+        return 1
+    fi
+    
+    print_success "Downloaded successfully"
+    
+    # Create destination and extract
+    mkdir -p "$dest"
+    
+    # Detect archive type and extract
+    if [[ "$temp_file" == *.tar.gz ]] || [[ "$temp_file" == *.tgz ]]; then
+        tar -xzf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$temp_file" -C "$dest"
+    elif [[ "$temp_file" == *.tar.bz2 ]]; then
+        tar -xjf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xjf "$temp_file" -C "$dest"
+    elif [[ "$temp_file" == *.tar.xz ]]; then
+        tar -xJf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xJf "$temp_file" -C "$dest"
+    elif [[ "$temp_file" == *.zip ]]; then
+        unzip -q "$temp_file" -d "$dest"
+        # If extraction created a single directory, move its contents up
+        local contents=$(ls -A "$dest")
+        if [[ $(echo "$contents" | wc -l) -eq 1 ]] && [[ -d "$dest/$contents" ]]; then
+            mv "$dest/$contents"/* "$dest/" 2>/dev/null || true
+            rmdir "$dest/$contents" 2>/dev/null || true
+        fi
+    elif [[ "$temp_file" == *.7z ]]; then
+        7z x "$temp_file" -o"$dest" >/dev/null 2>&1 || {
+            print_error "7z extraction failed. Is 7zip installed?"
+            rm -f "$temp_file"
+            return 1
+        }
+    else
+        # Try to detect by file content
+        if file "$temp_file" | grep -q "gzip"; then
+            tar -xzf "$temp_file" -C "$dest" --strip-components=1 2>/dev/null || tar -xzf "$temp_file" -C "$dest"
+        elif file "$temp_file" | grep -q "Zip"; then
+            unzip -q "$temp_file" -d "$dest"
+        else
+            print_error "Unknown archive format"
+            rm -f "$temp_file"
+            return 1
+        fi
+    fi
+    
+    rm -f "$temp_file"
+    print_success "Extracted successfully"
+    return 0
+}
+
+# Compile package based on detected language
+compile_package() {
+    local package_dir=$1
+    local language=$2
+    
+    print_info "Detected language: ${BLUE}${language}${NC}"
+    
+    case $language in
+        make|c|cpp)
+            compile_make "$package_dir"
+            ;;
+        cmake)
+            compile_cmake "$package_dir"
+            ;;
+        csharp)
+            compile_csharp "$package_dir"
+            ;;
+        java)
+            compile_java "$package_dir"
+            ;;
+        *)
+            print_warning "No compilation needed for $language"
+            return 0
+            ;;
+    esac
+}
+
+compile_make() {
+    local dir=$1
+    
+    if [[ ! -f "$dir/Makefile" ]] && [[ ! -f "$dir/makefile" ]]; then
+        print_warning "Makefile not found"
+        return 1
+    fi
+    
+    print_info "Running make..."
+    cd "$dir"
+    
+    if ! make 2>&1 | tee -a "$UBREW_LOG"; then
+        print_error "Make compilation failed"
+        return 1
+    fi
+    
+    print_success "Compilation completed"
+    return 0
+}
+
+compile_cmake() {
+    local dir=$1
+    
+    if [[ ! -f "$dir/CMakeLists.txt" ]]; then
+        print_warning "CMakeLists.txt not found"
+        return 1
+    fi
+    
+    print_info "Running cmake..."
+    cd "$dir"
+    
+    mkdir -p build
+    cd build
+    
+    if ! cmake .. 2>&1 | tee -a "$UBREW_LOG"; then
+        print_error "CMake configuration failed"
+        return 1
+    fi
+    
+    if ! make 2>&1 | tee -a "$UBREW_LOG"; then
+        print_error "CMake make failed"
+        return 1
+    fi
+    
+    print_success "Compilation completed"
+    return 0
+}
+
+compile_csharp() {
+    local dir=$1
+    
+    print_info "Running dotnet build..."
+    cd "$dir"
+    
+    if ! dotnet build -c Release 2>&1 | tee -a "$UBREW_LOG"; then
+        print_error "C# compilation failed"
+        return 1
+    fi
+    
+    print_success "Compilation completed"
+    return 0
+}
+
+compile_java() {
+    local dir=$1
+    
+    print_info "Running Java compilation..."
+    cd "$dir"
+    
+    if [[ -f "pom.xml" ]]; then
+        if ! mvn clean package -DskipTests 2>&1 | tee -a "$UBREW_LOG"; then
+            print_error "Maven build failed"
+            return 1
+        fi
+    elif [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; then
+        if ! gradle build -x test 2>&1 | tee -a "$UBREW_LOG"; then
+            print_error "Gradle build failed"
+            return 1
+        fi
+    else
+        print_warning "No Maven or Gradle configuration found"
+        return 1
+    fi
+    
+    print_success "Compilation completed"
+    return 0
+}
+
+# Find executable in compiled package
+find_executable() {
+    local package_dir=$1
+    local language=$2
+    
+    case $language in
+        make|c|cpp)
+            # Look for executables in common locations
+            find "$package_dir" -maxdepth 2 -type f -executable | head -1
+            ;;
+        cmake)
+            # Look in build directory
+            find "$package_dir/build" -maxdepth 1 -type f -executable | head -1
+            ;;
+        csharp)
+            # Look for .dll or .exe files in bin/Release
+            find "$package_dir" -path "*/bin/Release/*" -name "*.dll" -o -name "*.exe" | head -1
+            ;;
+        java)
+            # Look for jar files
+            find "$package_dir" -name "*.jar" | head -1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Update PATH with package executables
+update_package_path() {
+    local package_name=$1
+    local package_dir=$2
+    local bin_dir="$package_dir/bin"
+    
+    # Create bin directory if it doesn't exist
+    if [[ ! -d "$bin_dir" ]]; then
+        mkdir -p "$bin_dir"
+    fi
+    
+    # Add to path configuration if not already there
+    if ! grep -q "$package_name" "$UBREW_PATH_FILE"; then
+        echo "export PATH=\"$bin_dir:\$PATH\" # ubrew: $package_name" >> "$UBREW_PATH_FILE"
+        print_success "Updated PATH configuration for $package_name"
+    fi
+}
+
+# Get the shell configuration file
+get_shell_rc_file() {
+    if [[ "$SHELL" == *"zsh"* ]]; then
+        echo "$HOME/.zshrc"
+    elif [[ "$SHELL" == *"bash"* ]]; then
+        echo "$HOME/.bashrc"
+    else
+        echo "$HOME/.bashrc"
+    fi
+}
+
+###############################################################################
+# Command Implementations
+###############################################################################
+
+cmd_add() {
+    if [[ $# -lt 1 ]]; then
+        print_error "Usage: ubrew.sh add <url>"
+        return 1
+    fi
+    
+    local url=$1
+    local package_name=$(infer_package_name "$url")
+    local package_dir="$LOCAL_PACKAGES/$package_name"
+    
+    # Check if package already exists
+    if [[ -d "$package_dir" ]]; then
+        print_warning "Package '$package_name' already installed at $package_dir"
+        read -p "Overwrite? (y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            return 1
+        fi
+        rm -rf "$package_dir"
+    fi
+    
+    print_info "Installing package: ${BLUE}${package_name}${NC}"
+    print_info "URL: $url"
+    
+    # Download and extract
+    if ! download_and_extract "$url" "$package_dir"; then
+        rm -rf "$package_dir"
+        log "ERROR" "Failed to download/extract package: $url"
+        return 1
+    fi
+    
+    # Detect language
+    local language=$(detect_language "$package_dir")
+    print_info "Project type: ${BLUE}${language}${NC}"
+    
+    # Check build tools
+    if ! check_build_tools "$language"; then
+        print_error "Missing required build tools for $language"
+        print_info "Installation will continue, but compilation will be skipped"
+        log "WARNING" "Missing build tools for $language"
+    else
+        # Attempt compilation
+        if ! compile_package "$package_dir" "$language"; then
+            print_warning "Compilation failed, but package files are available"
+            log "ERROR" "Compilation failed for package: $package_name"
+        fi
+    fi
+    
+    # Update PATH
+    update_package_path "$package_name" "$package_dir"
+    
+    # Create installation metadata
+    cat > "$package_dir/.ubrew_metadata" <<EOF
+{
+  "name": "$package_name",
+  "url": "$url",
+  "language": "$language",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "installed_by": "ubrew.sh"
+}
+EOF
+    
+    print_success "Package '${package_name}' installed successfully!"
+    log "INFO" "Package installed: $package_name from $url"
+    
+    # Remind user to source the configuration
+    local rc_file=$(get_shell_rc_file)
+    print_info "To use the package, add the following to your shell configuration ($rc_file):"
+    echo "    if [[ -f \"$UBREW_PATH_FILE\" ]]; then source \"$UBREW_PATH_FILE\"; fi"
+    
+    return 0
+}
+
+cmd_remove() {
+    if [[ $# -lt 1 ]]; then
+        print_error "Usage: ubrew.sh remove <package-name>"
+        return 1
+    fi
+    
+    local package_name=$1
+    local package_dir="$LOCAL_PACKAGES/$package_name"
+    
+    if [[ ! -d "$package_dir" ]]; then
+        print_error "Package '$package_name' not found"
+        return 1
+    fi
+    
+    print_warning "Removing package: ${BLUE}${package_name}${NC}"
+    read -p "Are you sure? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Removal cancelled"
+        return 0
+    fi
+    
+    # Remove from PATH config
+    if grep -q "$package_name" "$UBREW_PATH_FILE"; then
+        sed -i.bak "/ ubrew: $package_name/d" "$UBREW_PATH_FILE"
+        rm -f "$UBREW_PATH_FILE.bak"
+        print_success "Removed from PATH configuration"
+    fi
+    
+    # Remove package directory
+    rm -rf "$package_dir"
+    print_success "Package '${package_name}' removed successfully!"
+    log "INFO" "Package removed: $package_name"
+    
+    return 0
+}
+
+cmd_list() {
+    print_info "Installed packages:"
+    
+    if [[ ! -d "$LOCAL_PACKAGES" ]] || [[ -z "$(ls -A "$LOCAL_PACKAGES")" ]]; then
+        print_warning "No packages installed"
+        return 0
+    fi
+    
+    local count=0
+    while IFS= read -r -d '' package_dir; do
+        if [[ -f "$package_dir/.ubrew_metadata" ]]; then
+            local metadata=$(cat "$package_dir/.ubrew_metadata")
+            local name=$(echo "$metadata" | grep -o '"name":"[^"]*' | cut -d'"' -f4)
+            local language=$(echo "$metadata" | grep -o '"language":"[^"]*' | cut -d'"' -f4)
+            local installed_at=$(echo "$metadata" | grep -o '"installed_at":"[^"]*' | cut -d'"' -f4)
+            
+            printf "  ${GREEN}✓${NC} %-20s [%s] %s\n" "$name" "$language" "$installed_at"
+            ((count++))
+        fi
+    done < <(find "$LOCAL_PACKAGES" -maxdepth 1 -type d -not -path "$LOCAL_PACKAGES" -print0)
+    
+    if [[ $count -eq 0 ]]; then
+        print_warning "No packages with valid metadata found"
+    else
+        print_info "Total: $count package(s) installed"
+    fi
+    
+    return 0
+}
+
+cmd_init() {
+    print_info "Initializing ubrew..."
+    
+    local script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")}" && pwd)/ubrew.sh"
+    local source_line="source \"$script_path\"  # ubrew.sh initialization"
+    
+    # Initialize ubrew home
+    initialize
+    
+    local updated=0
+    
+    # Update ~/.bashrc if it exists
+    if [[ -f "$HOME/.bashrc" ]]; then
+        if ! grep -q "ubrew.sh initialization" "$HOME/.bashrc" 2>/dev/null; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# ubrew.sh configuration" >> "$HOME/.bashrc"
+            echo "$source_line" >> "$HOME/.bashrc"
+            echo "if [[ -f \"$UBREW_PATH_FILE\" ]]; then source \"$UBREW_PATH_FILE\"; fi" >> "$HOME/.bashrc"
+            print_success "Added ubrew to ~/.bashrc"
+            ((updated++))
+        else
+            print_warning "ubrew already in ~/.bashrc"
+        fi
+    fi
+    
+    # Update ~/.zshrc if it exists
+    if [[ -f "$HOME/.zshrc" ]]; then
+        if ! grep -q "ubrew.sh initialization" "$HOME/.zshrc" 2>/dev/null; then
+            echo "" >> "$HOME/.zshrc"
+            echo "# ubrew.sh configuration" >> "$HOME/.zshrc"
+            echo "$source_line" >> "$HOME/.zshrc"
+            echo "if [[ -f \"$UBREW_PATH_FILE\" ]]; then source \"$UBREW_PATH_FILE\"; fi" >> "$HOME/.zshrc"
+            print_success "Added ubrew to ~/.zshrc"
+            ((updated++))
+        else
+            print_warning "ubrew already in ~/.zshrc"
+        fi
+    fi
+    
+    if [[ $updated -eq 0 ]]; then
+        print_warning "ubrew already initialized"
+        return 0
+    fi
+    
+    print_success "ubrew initialized successfully!"
+    print_info "Please reload your shell:"
+    echo "    exec \$SHELL"
+    
+    log "INFO" "ubrew initialized by user"
+    return 0
+}
+
+cmd_uninit() {
+    print_warning "Removing ubrew from shell configuration files..."
+    read -p "Are you sure? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Uninitialization cancelled"
+        return 0
+    fi
+    
+    local updated=0
+    
+    # Remove from ~/.bashrc
+    if [[ -f "$HOME/.bashrc" ]]; then
+        if grep -q "ubrew.sh initialization" "$HOME/.bashrc" 2>/dev/null; then
+            sed -i.bak '/# ubrew.sh configuration/,/ubrew.sh initialization/d' "$HOME/.bashrc"
+            sed -i.bak '/if \[\[ -f.*UBREW_PATH_FILE/d' "$HOME/.bashrc"
+            rm -f "$HOME/.bashrc.bak"
+            print_success "Removed ubrew from ~/.bashrc"
+            ((updated++))
+        fi
+    fi
+    
+    # Remove from ~/.zshrc
+    if [[ -f "$HOME/.zshrc" ]]; then
+        if grep -q "ubrew.sh initialization" "$HOME/.zshrc" 2>/dev/null; then
+            sed -i.bak '/# ubrew.sh configuration/,/ubrew.sh initialization/d' "$HOME/.zshrc"
+            sed -i.bak '/if \[\[ -f.*UBREW_PATH_FILE/d' "$HOME/.zshrc"
+            rm -f "$HOME/.zshrc.bak"
+            print_success "Removed ubrew from ~/.zshrc"
+            ((updated++))
+        fi
+    fi
+    
+    if [[ $updated -eq 0 ]]; then
+        print_warning "ubrew not found in shell configuration"
+        return 1
+    fi
+    
+    print_success "ubrew uninitialized successfully!"
+    print_info "Please reload your shell:"
+    echo "    exec \$SHELL"
+    
+    log "INFO" "ubrew uninitialized by user"
+    return 0
+}
+
+cmd_help() {
+    cat <<EOF
+${BLUE}ubrew.sh${NC} - Simple Package Manager for Ubuntu
+
+${BLUE}Usage:${NC}
+  ubrew.sh [command] [options]
+
+${BLUE}Commands:${NC}
+  init                   Initialize ubrew (adds to ~/.bashrc and ~/.zshrc)
+  uninit                 Uninstall ubrew (removes from shell config)
+  
+  add <url>              Download, extract, and install a package from a URL
+                         Supports: tar.gz, tar.bz2, tar.xz, zip, 7z
+                         
+  remove <package-name>  Remove an installed package
+                         
+  list                   Show all installed packages
+                         
+  help                   Show this help message
+
+${BLUE}Examples:${NC}
+  ubrew.sh init
+  ubrew.sh add https://github.com/user/project/archive/refs/tags/v1.0.tar.gz
+  ubrew.sh remove project
+  ubrew.sh list
+  ubrew.sh uninit
+
+${BLUE}Configuration:${NC}
+  Local packages directory: $LOCAL_PACKAGES
+  Configuration file: $UBREW_PATH_FILE
+  Log file: $UBREW_LOG
+
+${BLUE}Supported Languages:${NC}
+  - C (with Make)
+  - C++ (with Make or CMake)
+  - C# (.NET)
+  - Java (Maven or Gradle)
+  - Python, Node.js, Go, Rust (no compilation needed)
+
+${BLUE}Features:${NC}
+  ✓ Automatic language detection
+  ✓ Automatic compilation when needed
+  ✓ PATH management
+  ✓ Installation logging
+  ✓ Metadata tracking
+
+EOF
+}
+
+###############################################################################
+# Main Entry Point
+###############################################################################
+
+main() {
+    initialize
+    
+    if [[ $# -eq 0 ]]; then
+        cmd_help
+        return 1
+    fi
+    
+    local command=$1
+    shift
+    
+    case $command in
+        init)
+            cmd_init "$@"
+            ;;
+        uninit)
+            cmd_uninit "$@"
+            ;;
+        add)
+            cmd_add "$@"
+            ;;
+        remove)
+            cmd_remove "$@"
+            ;;
+        list)
+            cmd_list "$@"
+            ;;
+        help|--help|-h)
+            cmd_help
+            ;;
+        *)
+            print_error "Unknown command: $command"
+            cmd_help
+            return 1
+            ;;
+    esac
+}
+
+# Only execute main when script is run directly, not when sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
