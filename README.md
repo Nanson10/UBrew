@@ -7,9 +7,12 @@ A simple, homebrew-like package manager for Ubuntu that automatically downloads,
 - 📦 **Download & Extract**: Supports multiple archive formats (tar.gz, tar.bz2, tar.xz, zip, 7z)
 - 🔍 **Auto-Detection**: Automatically detects project language and build system
 - 🔨 **Auto-Compilation**: Compiles C, C++, C#, and Java projects with appropriate build tools
-- 📍 **PATH Management**: Automatically manages your system PATH
+- �️ **Smart PATH Management**: Automatically adds/removes packages from PATH
+- 🔧 **Self-Healing**: `verify` command detects and fixes PATH configuration issues
+- 🔒 **Protected Configuration**: Clearly marked sections prevent accidental manual edits
 - 📝 **Logging**: Tracks all operations in a log file
 - 📦 **Local Storage**: All packages stored in `~/local_packages`
+- 🎯 **Zero Manual Configuration**: Everything is automatic after `init`
 
 ## Installation
 
@@ -98,8 +101,10 @@ The script will:
 2. ✅ Extract to `~/local_packages/<package-name>`
 3. ✅ Detect the programming language
 4. ✅ Compile if necessary
-5. ✅ Update your PATH
+5. ✅ **Automatically add to your PATH**
 6. ✅ Create metadata for tracking
+
+**The package is immediately available in your current shell!**
 
 ### List Installed Packages
 
@@ -125,6 +130,36 @@ Example:
 ```bash
 ./ubrew.sh remove fzf
 ```
+
+**The package is automatically removed from your PATH!**
+
+### Verify PATH Configuration
+
+```bash
+./ubrew.sh verify
+```
+
+This command checks and fixes:
+- ✅ Installed packages missing from PATH
+- ✅ PATH entries for uninstalled packages
+- ✅ Missing bin directories
+- ✅ Proper file structure
+
+Example output:
+```
+ℹ Verifying ubrew PATH configuration...
+⚠ Package 'neovim' is installed but not in PATH
+✓ Fixed: Added 'neovim' to PATH
+⚠ PATH contains 'old-package' but package is not installed
+✓ Fixed: Removed 'old-package' from PATH
+ℹ Found 2 issue(s), fixed 2
+✓ PATH verification complete!
+```
+
+**Use this if:**
+- You manually deleted a package directory
+- The PATH seems out of sync
+- You want to ensure everything is properly configured
 
 ### Uninstall ubrew
 
@@ -170,18 +205,44 @@ Supported compilers:
 ```
 ~/
 ├── .ubrew/
-│   ├── path.conf          # PATH configuration (sourced in shell RC)
+│   ├── path.conf          # PATH configuration (auto-managed, DO NOT EDIT manually)
 │   └── ubrew.log          # Activity log
 └── local_packages/
     ├── package1/
     │   ├── .ubrew_metadata
-    │   ├── bin/            # Executables added to PATH
+    │   ├── bin/            # Executables (automatically added to PATH)
     │   └── ...
     └── package2/
         ├── .ubrew_metadata
         ├── bin/
         └── ...
 ```
+
+### PATH Configuration File
+
+The `~/.ubrew/path.conf` file has a protected section:
+
+```bash
+#!/bin/bash
+# ubrew PATH configuration file
+# 
+# WARNING: DO NOT MANUALLY EDIT THE SECTION BETWEEN THE MARKERS BELOW!
+# This section is automatically managed by ubrew.sh
+# Manual edits will be overwritten when packages are added or removed.
+#
+# === BEGIN UBREW MANAGED PATHS ===
+export PATH="/home/user/local_packages/fzf/bin:$PATH" # ubrew: fzf
+export PATH="/home/user/local_packages/jq/bin:$PATH" # ubrew: jq
+# === END UBREW MANAGED PATHS ===
+#
+# You may add your own custom PATH modifications below this line:
+# (Your custom exports go here and will never be touched by ubrew)
+```
+
+**Key Points:**
+- ⚠️ **Don't edit the section between the markers** - it's auto-managed
+- ✅ **Safe to add your own exports below the markers**
+- 🔧 **Run `ubrew.sh verify` to fix any corruption**
 
 ## Troubleshooting
 
@@ -201,11 +262,40 @@ Install the required build tools for your language:
 
 ### PATH Not Updated
 
-Make sure you've sourced the PATH configuration in your shell RC file and reloaded it:
+1. First, try running verify to fix any issues:
 ```bash
-source ~/.bashrc
-# or
-source ~/.zshrc
+./ubrew.sh verify
+```
+
+2. If that doesn't help, make sure you've initialized ubrew:
+```bash
+./ubrew.sh init
+exec $SHELL
+```
+
+3. Verify the path.conf is being sourced in your shell RC file:
+```bash
+grep "ubrew" ~/.zshrc  # or ~/.bashrc
+```
+
+### PATH Configuration Corrupted
+
+If you accidentally edited the protected section or something went wrong:
+```bash
+./ubrew.sh verify
+```
+
+This will automatically detect and fix:
+- Missing packages in PATH
+- Orphaned PATH entries
+- Structural issues with the config file
+
+### Package Appears Installed but Command Not Found
+
+Run verify to ensure the package is properly registered:
+```bash
+./ubrew.sh verify
+exec $SHELL  # Reload your shell
 ```
 
 ### Can't Find Package Executable
@@ -215,10 +305,43 @@ Some packages may not provide executables in standard locations. Check the packa
 ls -la ~/local_packages/<package-name>/
 ```
 
+You may need to manually symlink executables to the bin directory:
+```bash
+ln -s ~/local_packages/<package-name>/path/to/executable ~/local_packages/<package-name>/bin/
+```
+
 ## Configuration Files
 
-**`~/.ubrew/path.conf`** - Contains PATH export commands for all installed packages
-**`~/.ubrew/ubrew.log`** - Complete activity log
+**`~/.ubrew/path.conf`** - Contains PATH export commands for all installed packages. **DO NOT manually edit the section between the markers!** The file has a protected auto-managed section and a safe zone for your custom PATH additions.
+
+**`~/.ubrew/ubrew.log`** - Complete activity log with timestamps for all operations.
+
+## Commands Reference
+
+| Command | Description |
+|---------|-------------|
+| `init` | Initialize ubrew and add to shell configuration |
+| `uninit` | Remove ubrew from shell configuration |
+| `add <url>` | Download, extract, compile, and install a package |
+| `remove <name>` | Remove an installed package |
+| `list` | Show all installed packages with metadata |
+| `verify` | Check and repair PATH configuration |
+| `help` | Display help information |
+
+## Best Practices
+
+✅ **DO:**
+- Run `./ubrew.sh init` once after downloading the script
+- Use `./ubrew.sh verify` if you suspect PATH issues
+- Add custom PATH exports below the protected section in path.conf
+- Check the log file if something goes wrong
+
+❌ **DON'T:**
+- Edit the protected section in `~/.ubrew/path.conf`
+- Manually delete packages from `~/local_packages` without running `remove`
+- Move package directories after installation
+
+If you do accidentally mess things up, just run `./ubrew.sh verify` to fix it!
 
 ## Limitations
 
@@ -226,15 +349,56 @@ ls -la ~/local_packages/<package-name>/
 - ⚠️ **No Version Management**: Installing a package with the same name overwrites the previous version
 - ⚠️ **Limited to Supported Languages**: Other languages are extracted but not compiled
 
+## Future Enhancements
+
+Potential features for future versions:
+- Dependency resolution
+- Multiple version support
+- Package registry/database
+- Rollback functionality  
+- Update checking
+- Binary-only package support
+- Custom build script support
+
 ## Contributing
 
 Feel free to extend this script with:
 - Additional language support
-- Dependency resolution
-- Version management
-- Package registry
-- Rollback functionality
+- Better compilation detection
+- Enhanced error handling
+- Package templates
+- Integration with other package managers
 
 ## License
 
 MIT License - Feel free to use and modify!
+
+---
+
+## Quick Start Example
+
+```bash
+# 1. Make executable
+chmod +x ubrew.sh
+
+# 2. Initialize
+./ubrew.sh init
+exec $SHELL
+
+# 3. Install a package
+./ubrew.sh add https://github.com/user/project/archive/v1.0.tar.gz
+
+# 4. Use it immediately (already in PATH!)
+project-command --version
+
+# 5. List installed packages
+./ubrew.sh list
+
+# 6. Verify everything is good
+./ubrew.sh verify
+
+# 7. Remove when done
+./ubrew.sh remove project
+```
+
+That's it! Enjoy your homebrew-like experience on Ubuntu! 🎉

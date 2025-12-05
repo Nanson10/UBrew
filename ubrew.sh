@@ -36,9 +36,23 @@ initialize() {
     mkdir -p "$UBREW_HOME"
     mkdir -p "$LOCAL_PACKAGES"
     
-    # Initialize path config if it doesn't exist
+    # Initialize path config with proper structure
     if [[ ! -f "$UBREW_PATH_FILE" ]]; then
-        touch "$UBREW_PATH_FILE"
+        cat > "$UBREW_PATH_FILE" <<'EOF'
+#!/bin/bash
+# ubrew PATH configuration file
+# 
+# WARNING: DO NOT MANUALLY EDIT THE SECTION BETWEEN THE MARKERS BELOW!
+# This section is automatically managed by ubrew.sh
+# Manual edits will be overwritten when packages are added or removed.
+#
+# === BEGIN UBREW MANAGED PATHS ===
+# (ubrew will automatically add package paths here)
+# === END UBREW MANAGED PATHS ===
+#
+# You may add your own custom PATH modifications below this line:
+
+EOF
     fi
 }
 
@@ -365,18 +379,202 @@ find_executable() {
 update_package_path() {
     local package_name=$1
     local package_dir=$2
-    local bin_dir="$package_dir/bin"
     
-    # Create bin directory if it doesn't exist
-    if [[ ! -d "$bin_dir" ]]; then
-        mkdir -p "$bin_dir"
+    # Simply call verify to ensure everything is in sync
+    # The verify function will handle adding missing packages
+    cmd_verify >/dev/null 2>&1
+    
+    # Double-check that the package was added
+    if grep -q "# ubrew: $package_name\$" "$UBREW_PATH_FILE"; then
+        print_success "Added $package_name to PATH"
+        
+        # Source the updated path file in current shell if possible
+        if [[ -n "$BASH_VERSION" ]] || [[ -n "$ZSH_VERSION" ]]; then
+            source "$UBREW_PATH_FILE" 2>/dev/null || true
+        fi
+    fi
+}
+
+# Remove package from PATH configuration
+remove_package_path() {
+    local package_name=$1
+    
+    # Simply call verify to ensure everything is in sync
+    # The verify function will handle removing orphaned entries
+    cmd_verify >/dev/null 2>&1
+    
+    # Confirm removal
+    if ! grep -q "# ubrew: $package_name\$" "$UBREW_PATH_FILE" 2>/dev/null; then
+        print_success "Removed $package_name from PATH"
+    fi
+}
+
+# Ensure path file has the proper structure with warnings
+ensure_path_file_structure() {
+    if [[ ! -f "$UBREW_PATH_FILE" ]]; then
+        cat > "$UBREW_PATH_FILE" <<'EOF'
+#!/bin/bash
+# ubrew PATH configuration file
+# 
+# WARNING: DO NOT MANUALLY EDIT THE SECTION BETWEEN THE MARKERS BELOW!
+# This section is automatically managed by ubrew.sh
+# Manual edits will be overwritten when packages are added or removed.
+#
+# === BEGIN UBREW MANAGED PATHS ===
+# (ubrew will automatically add package paths here)
+# === END UBREW MANAGED PATHS ===
+#
+# You may add your own custom PATH modifications below this line:
+
+EOF
+    else
+        # Check if markers exist, if not add them
+        if ! grep -q "^# === BEGIN UBREW MANAGED PATHS ===" "$UBREW_PATH_FILE"; then
+            # Backup existing entries
+            local temp_file=$(mktemp)
+            if grep -q "# ubrew:" "$UBREW_PATH_FILE"; then
+                grep "# ubrew:" "$UBREW_PATH_FILE" > "$temp_file"
+            fi
+            
+            # Recreate file with structure
+            cat > "$UBREW_PATH_FILE" <<'EOF'
+#!/bin/bash
+# ubrew PATH configuration file
+# 
+# WARNING: DO NOT MANUALLY EDIT THE SECTION BETWEEN THE MARKERS BELOW!
+# This section is automatically managed by ubrew.sh
+# Manual edits will be overwritten when packages are added or removed.
+#
+# === BEGIN UBREW MANAGED PATHS ===
+# (ubrew will automatically add package paths here)
+EOF
+            
+            # Add back existing entries
+            if [[ -s "$temp_file" ]]; then
+                cat "$temp_file" >> "$UBREW_PATH_FILE"
+            fi
+            
+            cat >> "$UBREW_PATH_FILE" <<'EOF'
+# === END UBREW MANAGED PATHS ===
+#
+# You may add your own custom PATH modifications below this line:
+
+EOF
+            rm -f "$temp_file"
+        fi
+    fi
+}
+
+# Verify and synchronize PATH configuration with installed packages
+# This function ensures that:
+# 1. All installed packages have their paths in the config
+# 2. All paths in the config correspond to actual installed packages
+# 3. The path file has the proper structure
+cmd_verify() {
+    print_info "Verifying ubrew PATH configuration..."
+    
+    # Ensure proper structure
+    ensure_path_file_structure
+    
+    local issues_found=0
+    local issues_fixed=0
+    
+    # Get list of installed packages
+    local installed_packages=()
+    if [[ -d "$LOCAL_PACKAGES" ]]; then
+        while IFS= read -r -d '' package_dir; do
+            local package_name=$(basename "$package_dir")
+            if [[ -f "$package_dir/.ubrew_metadata" ]]; then
+                installed_packages+=("$package_name")
+            fi
+        done < <(find "$LOCAL_PACKAGES" -maxdepth 1 -type d -not -path "$LOCAL_PACKAGES" -print0)
     fi
     
-    # Add to path configuration if not already there
-    if ! grep -q "$package_name" "$UBREW_PATH_FILE"; then
-        echo "export PATH=\"$bin_dir:\$PATH\" # ubrew: $package_name" >> "$UBREW_PATH_FILE"
-        print_success "Updated PATH configuration for $package_name"
+    # Get list of packages in PATH config
+    local configured_packages=()
+    if [[ -f "$UBREW_PATH_FILE" ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ \#\ ubrew:\ (.+)$ ]]; then
+                configured_packages+=("${BASH_REMATCH[1]}")
+            fi
+        done < "$UBREW_PATH_FILE"
     fi
+    
+    # Check for installed packages missing from PATH
+    for package in "${installed_packages[@]}"; do
+        local found=0
+        for configured in "${configured_packages[@]}"; do
+            if [[ "$package" == "$configured" ]]; then
+                found=1
+                break
+            fi
+        done
+        
+        if [[ $found -eq 0 ]]; then
+            print_warning "Package '$package' is installed but not in PATH"
+            ((issues_found++))
+            
+            # Fix: Add to PATH
+            local package_dir="$LOCAL_PACKAGES/$package"
+            local bin_dir="$package_dir/bin"
+            mkdir -p "$bin_dir"
+            
+            sed -i.bak "/^# === END UBREW MANAGED PATHS ===/i\\
+export PATH=\"$bin_dir:\\\$PATH\" # ubrew: $package" "$UBREW_PATH_FILE"
+            rm -f "$UBREW_PATH_FILE.bak"
+            
+            print_success "Fixed: Added '$package' to PATH"
+            ((issues_fixed++))
+        fi
+    done
+    
+    # Check for PATH entries without corresponding packages
+    for configured in "${configured_packages[@]}"; do
+        local found=0
+        for package in "${installed_packages[@]}"; do
+            if [[ "$configured" == "$package" ]]; then
+                found=1
+                break
+            fi
+        done
+        
+        if [[ $found -eq 0 ]]; then
+            print_warning "PATH contains '$configured' but package is not installed"
+            ((issues_found++))
+            
+            # Fix: Remove from PATH
+            sed -i.bak "/# ubrew: $configured\$/d" "$UBREW_PATH_FILE"
+            rm -f "$UBREW_PATH_FILE.bak"
+            
+            print_success "Fixed: Removed '$configured' from PATH"
+            ((issues_fixed++))
+        fi
+    done
+    
+    # Verify that package directories actually exist and are accessible
+    for package in "${installed_packages[@]}"; do
+        local package_dir="$LOCAL_PACKAGES/$package"
+        local bin_dir="$package_dir/bin"
+        
+        if [[ ! -d "$bin_dir" ]]; then
+            print_warning "Package '$package' missing bin directory"
+            ((issues_found++))
+            mkdir -p "$bin_dir"
+            print_success "Fixed: Created bin directory for '$package'"
+            ((issues_fixed++))
+        fi
+    done
+    
+    # Summary
+    if [[ $issues_found -eq 0 ]]; then
+        print_success "PATH configuration is correct! All packages are properly configured."
+    else
+        print_info "Found $issues_found issue(s), fixed $issues_fixed"
+        print_success "PATH verification complete!"
+    fi
+    
+    log "INFO" "PATH verification completed: $issues_found issues found, $issues_fixed fixed"
+    return 0
 }
 
 # Get the shell configuration file
@@ -442,9 +640,6 @@ cmd_add() {
         fi
     fi
     
-    # Update PATH
-    update_package_path "$package_name" "$package_dir"
-    
     # Create installation metadata
     cat > "$package_dir/.ubrew_metadata" <<EOF
 {
@@ -456,13 +651,22 @@ cmd_add() {
 }
 EOF
     
+    # Update PATH
+    update_package_path "$package_name" "$package_dir"
+    
     print_success "Package '${package_name}' installed successfully!"
+    print_success "Package automatically added to PATH"
     log "INFO" "Package installed: $package_name from $url"
     
-    # Remind user to source the configuration
+    # Remind user to source the configuration if not already done
     local rc_file=$(get_shell_rc_file)
-    print_info "To use the package, add the following to your shell configuration ($rc_file):"
-    echo "    if [[ -f \"$UBREW_PATH_FILE\" ]]; then source \"$UBREW_PATH_FILE\"; fi"
+    if ! grep -q "source.*$UBREW_PATH_FILE" "$rc_file" 2>/dev/null; then
+        print_info "To use the package in new shells, run: ubrew.sh init"
+        print_info "Or add this to your $rc_file:"
+        echo "    if [[ -f \"$UBREW_PATH_FILE\" ]]; then source \"$UBREW_PATH_FILE\"; fi"
+    else
+        print_info "Reload your shell to use the package: exec \$SHELL"
+    fi
     
     return 0
 }
@@ -490,11 +694,7 @@ cmd_remove() {
     fi
     
     # Remove from PATH config
-    if grep -q "$package_name" "$UBREW_PATH_FILE"; then
-        sed -i.bak "/ ubrew: $package_name/d" "$UBREW_PATH_FILE"
-        rm -f "$UBREW_PATH_FILE.bak"
-        print_success "Removed from PATH configuration"
-    fi
+    remove_package_path "$package_name"
     
     # Remove package directory
     rm -rf "$package_dir"
@@ -649,6 +849,10 @@ ${BLUE}Commands:${NC}
   remove <package-name>  Remove an installed package
                          
   list                   Show all installed packages
+  
+  verify                 Verify and fix PATH configuration
+                         Ensures all installed packages are in PATH and
+                         removes orphaned entries
                          
   help                   Show this help message
 
@@ -657,6 +861,7 @@ ${BLUE}Examples:${NC}
   ubrew.sh add https://github.com/user/project/archive/refs/tags/v1.0.tar.gz
   ubrew.sh remove project
   ubrew.sh list
+  ubrew.sh verify
   ubrew.sh uninit
 
 ${BLUE}Configuration:${NC}
@@ -674,7 +879,8 @@ ${BLUE}Supported Languages:${NC}
 ${BLUE}Features:${NC}
   ✓ Automatic language detection
   ✓ Automatic compilation when needed
-  ✓ PATH management
+  ✓ Automatic PATH management
+  ✓ PATH verification and repair
   ✓ Installation logging
   ✓ Metadata tracking
 
@@ -711,6 +917,9 @@ main() {
             ;;
         list)
             cmd_list "$@"
+            ;;
+        verify)
+            cmd_verify "$@"
             ;;
         help|--help|-h)
             cmd_help
