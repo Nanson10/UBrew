@@ -22,8 +22,8 @@ cmd_verify() {
         remove_package_path "$orphan"
     done
     # Check for orphaned archives
-    if [ -d "$LOCAL_PACKAGES/archives" ]; then
-        for archive in "$LOCAL_PACKAGES/archives"/*; do
+    if [ -d "$UBREW_ROOT/archives" ]; then
+        for archive in "$UBREW_ROOT/archives"/*; do
             [ -f "$archive" ] || continue
             local pkg_name
             pkg_name=$(infer_package_name "$(basename "$archive")")

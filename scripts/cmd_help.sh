@@ -33,6 +33,7 @@ ${BLUE}Examples:${NC}
   ubrew.sh uninit
 
 ${BLUE}Configuration:${NC}
+  UBrew root directory:     $UBREW_ROOT
   Local packages directory: $LOCAL_PACKAGES
   Configuration file: $UBREW_PATH_FILE
   Log file: $UBREW_LOG

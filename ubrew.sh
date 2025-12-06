@@ -14,8 +14,9 @@ export NC='\033[0m' # No Color
 
 # Configuration
 export UBREW_HOME="${HOME}/.ubrew"
-export LOCAL_PACKAGES="${HOME}/local_packages"
-export ARCHIVES_DIR="${LOCAL_PACKAGES}/archives"
+export UBREW_ROOT="${HOME}/local_packages"
+export LOCAL_PACKAGES="${UBREW_ROOT}/packages"
+export ARCHIVES_DIR="${UBREW_ROOT}/archives"
 export UBREW_TEMP="${UBREW_HOME}/temp"
 export UBREW_PATH_FILE="${UBREW_HOME}/path.conf"
 export UBREW_LOG="${UBREW_HOME}/ubrew.log"

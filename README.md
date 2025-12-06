@@ -12,7 +12,7 @@ A simple, homebrew-like package manager for Ubuntu that automatically downloads,
 - 🔒 **Protected Configuration**: Clearly marked sections prevent accidental manual edits
 - 📝 **Logging**: Tracks all operations in a log file
 - 💾 **Archive Caching**: Downloaded archives are cached to avoid re-downloading
-- 📦 **Local Storage**: All packages stored in `~/local_packages`
+- 📦 **Local Storage**: All packages stored in `~/local_packages/packages` with archives cached in `~/local_packages/archives`
 - 🎯 **Zero Manual Configuration**: Everything is automatic after `init`
 
 ## Installation
@@ -74,11 +74,19 @@ To later remove ubrew from your shell configuration:
 ./ubrew.sh init
 ```
 
+To force re-initialization and clear all existing data (packages and archives), use the `--force` flag:
+
+```bash
+./ubrew.sh init --force
+```
+
 This command:
-- Creates the necessary directories (`~/.ubrew` and `~/local_packages`)
-- Adds ubrew to both `~/.bashrc` and `~/.zshrc`
-- Configures PATH management
-- Prompts you to reload your shell
+- Creates the necessary directories (`~/.ubrew`, `~/local_packages/packages`, `~/local_packages/archives`).
+- Adds ubrew to both `~/.bashrc` and `~/.zshrc`.
+- Configures PATH management.
+- Prompts you to reload your shell.
+
+If `ubrew` is already initialized, the command will exit with a warning. Use the `--force` flag if you intend to start fresh.
 
 After initialization, you can call ubrew from anywhere and all installed packages will be available in your PATH.
 
