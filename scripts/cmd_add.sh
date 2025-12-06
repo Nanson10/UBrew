@@ -13,9 +13,16 @@ cmd_add() {
     local package_dir="$LOCAL_PACKAGES/$package_name"
     
     # Download and extract
-    download_and_extract "$url" "$package_dir"
+    local archive_path
+    archive_path=$(download "$url")
     if [ $? -ne 0 ]; then
-        print_error "Download or extraction failed."
+        print_error "Download failed."
+        return 1
+    fi
+
+    extract "$archive_path" "$package_dir"
+    if [ $? -ne 0 ]; then
+        print_error "Extraction failed."
         return 1
     fi
     

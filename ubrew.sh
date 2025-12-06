@@ -31,7 +31,8 @@ source "${SCRIPTS_DIR}/log.sh"
 source "${SCRIPTS_DIR}/utils.sh"
 source "${SCRIPTS_DIR}/path.sh"
 source "${SCRIPTS_DIR}/initialize.sh"
-source "${SCRIPTS_DIR}/download_and_extract.sh"
+source "${SCRIPTS_DIR}/download.sh"
+source "${SCRIPTS_DIR}/extract.sh"
 source "${SCRIPTS_DIR}/compile.sh"
 
 # Source command functions
