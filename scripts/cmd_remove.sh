@@ -12,8 +12,8 @@ cmd_remove() {
         return 1
     fi
     rm -rf "$package_dir"
-    rm -f "$LOCAL_PACKAGES/archives/${package_name}.*"
+    rm -f "$ARCHIVES_DIR/${package_name}."*
     remove_package_path "$package_name"
-    log "Removed package: $package_name"
+    log "INFO" "Removed package: $package_name"
     print_success "Package '$package_name' removed."
 }
