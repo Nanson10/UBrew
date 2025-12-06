@@ -59,15 +59,17 @@ main() {
             ;;
         add)
             cmd_add "$@"
+            cmd_verify
             ;;
         remove)
             cmd_remove "$@"
+            cmd_verify
             ;;
         list)
             cmd_list "$@"
             ;;
         verify)
-            cmd_verify "$@"
+            cmd_verify --interactive
             ;;
         help|--help|-h)
             cmd_help

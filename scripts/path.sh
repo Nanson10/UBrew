@@ -2,8 +2,7 @@
 
 update_package_path() {
     local package_name=$1
-    local package_dir=$2
-    cmd_verify >/dev/null 2>&1
+    cmd_verify
     if grep -q "# ubrew: $package_name$" "$UBREW_PATH_FILE"; then
         print_success "Added $package_name to PATH"
         if [[ -n "$BASH_VERSION" ]] || [[ -n "$ZSH_VERSION" ]]; then
