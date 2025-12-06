@@ -1,24 +1,37 @@
 #!/bin/bash
 
 cmd_add() {
-    local url="$1"
-    if [ -z "$url" ]; then
-        print_error "No URL provided."
+    local source_arg="$1"
+    if [ -z "$source_arg" ]; then
+        print_error "No URL or file path provided."
         return 1
     fi
+
+    local archive_path
+    if [[ -f "$source_arg" ]]; then
+        print_info "Using local file: $source_arg"
+        local filename
+        filename=$(basename "$source_arg")
+        archive_path="$ARCHIVES_DIR/$filename"
+        if ! cp "$source_arg" "$archive_path"; then
+            print_error "Failed to copy '$source_arg' to '$ARCHIVES_DIR'."
+            return 1
+        fi
+        print_success "Copied to archives."
+    else
+        print_info "Assuming URL: $source_arg"
+        archive_path=$(download "$source_arg")
+        if [ $? -ne 0 ]; then
+            print_error "Download failed."
+            return 1
+        fi
+    fi
+
     local filename
-    filename=$(get_filename_from_url "$url")
+    filename=$(basename "$archive_path")
     local package_name
     package_name=$(infer_package_name "$filename")
     local package_dir="$LOCAL_PACKAGES/$package_name"
-    
-    # Download and extract
-    local archive_path
-    archive_path=$(download "$url")
-    if [ $? -ne 0 ]; then
-        print_error "Download failed."
-        return 1
-    fi
 
     extract "$archive_path" "$package_dir"
     if [ $? -ne 0 ]; then

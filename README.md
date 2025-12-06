@@ -92,12 +92,16 @@ This command:
 
 If `ubrew` is already initialized, the command will exit with a warning. Use the `--force` flag if you intend to start fresh.
 
-### `add <URL>`
+### `add <URL_or_FilePath>`
 
-Downloads, extracts, and compiles a package from a URL.
+Downloads, extracts, and compiles a package from a URL or a local file path.
 
 ```bash
+# From a URL
 ./ubrew.sh add <URL>
+
+# From a local file
+./ubrew.sh add /path/to/archive.tar.gz
 ```
 
 After a successful installation, `ubrew` automatically runs a verification check to add the new package's binary directory to your `PATH`.
