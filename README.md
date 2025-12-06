@@ -86,7 +86,7 @@ To force re-initialization and clear all existing data (packages and archives), 
 
 This command:
 - Creates the necessary directories (`~/.ubrew`, `~/local_packages/packages`, `~/local_packages/archives`).
-- Adds `ubrew` to both `~/.bashrc` and `~/.zshrc`.
+- Automatically adds `ubrew` to both `~/.bashrc` and `~/.zshrc`.
 - Configures the `PATH` management file.
 - Prompts you to reload your shell.
 
@@ -150,7 +150,7 @@ This command performs the following actions:
 
 ### `uninit`
 
-Removes `ubrew` from your shell configuration files (`.bashrc` and `.zshrc`).
+Removes `ubrew` from your shell configuration files (`.bashrc` and `.zshrc`) automatically.
 
 ```bash
 ./ubrew.sh uninit

@@ -21,6 +21,20 @@ cmd_init() {
             exit 1
         fi
         initialize
-        print_success "ubrew initialized. Add to your shell config if not already present."
+        print_success "ubrew initialized."
+        
+        # Add to shell config
+        for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+            if [ -f "$rc_file" ]; then
+                if ! grep -q "UBREW" "$rc_file"; then
+                    echo -e "\n# === BEGIN UBREW INIT ===" >> "$rc_file"
+                    echo "source \"$UBREW_PATH_FILE\"" >> "$rc_file"
+                    echo "# === END UBREW INIT ===" >> "$rc_file"
+                    print_info "Added ubrew to $rc_file"
+                fi
+            fi
+        done
+        
+        print_warning "Please reload your shell for changes to take effect: exec \$SHELL"
     fi
 }
