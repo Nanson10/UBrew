@@ -7,6 +7,7 @@ cmd_init() {
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             print_info "Clearing existing ubrew installation..."
             rm -rf "$UBREW_ROOT"
+            rm -rf "$UBREW_HOME"
             print_success "Cleared."
             initialize
             print_success "ubrew re-initialized."
