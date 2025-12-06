@@ -129,6 +129,12 @@ Lists all installed packages.
 ./ubrew.sh list
 ```
 
+To see the full installation path for each package, use the `-p` flag:
+
+```bash
+./ubrew.sh list -p
+```
+
 ### `verify`
 
 Manually verifies the `ubrew` environment. This is the interactive version of the verification that runs automatically after `add` and `remove`.

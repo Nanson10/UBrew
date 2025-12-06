@@ -11,12 +11,12 @@ ${BLUE}Commands:${NC}
   init                   Initialize ubrew (adds to ~/.bashrc and ~/.zshrc)
   uninit                 Uninstall ubrew (removes from shell config)
   
-  add <url>              Download, extract, and install a package from a URL
+  add <url_or_filepath>  Download, extract, and install a package from a URL or local file.
                          Supports: tar.gz, tar.bz2, tar.xz, zip, 7z
                          
   remove <package-name>  Remove an installed package
                          
-  list                   Show all installed packages
+  list [-p]              Show all installed packages. Use -p to show full paths.
   
   verify                 Verify and fix PATH configuration
                          Ensures all installed packages are in PATH and
